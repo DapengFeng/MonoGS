@@ -6,13 +6,13 @@ import evo
 import numpy as np
 import torch
 from evo.core import metrics, trajectory
-from evo.core.metrics import PoseRelation, Unit
-from evo.core.trajectory import PosePath3D, PoseTrajectory3D
-from evo.tools import plot
-from evo.tools.plot import PlotMode
+from evo.core.trajectory import PosePath3D
 from evo.tools.settings import SETTINGS
 from matplotlib import pyplot as plt
 from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
+from torchmetrics.image.psnr import PeakSignalNoiseRatio
+from torchmetrics.image.ssim import StructuralSimilarityIndexMeasure
+import torchvision
 
 import wandb
 from gaussian_splatting.gaussian_renderer import render
@@ -20,15 +20,15 @@ from gaussian_splatting.utils.image_utils import psnr
 from gaussian_splatting.utils.loss_utils import ssim
 from gaussian_splatting.utils.system_utils import mkdir_p
 from utils.logging_utils import Log
+from copy import deepcopy
 
 
 def evaluate_evo(poses_gt, poses_est, plot_dir, label, monocular=False):
     ## Plot
     traj_ref = PosePath3D(poses_se3=poses_gt)
     traj_est = PosePath3D(poses_se3=poses_est)
-    traj_est_aligned = trajectory.align_trajectory(
-        traj_est, traj_ref, correct_scale=monocular
-    )
+    traj_est.align(traj_ref, correct_scale=monocular)
+    traj_est_aligned = traj_est
 
     ## RMSE
     pose_relation = metrics.PoseRelation.translation_part
@@ -46,21 +46,21 @@ def evaluate_evo(poses_gt, poses_est, plot_dir, label, monocular=False):
     ) as f:
         json.dump(ape_stats, f, indent=4)
 
-    plot_mode = evo.tools.plot.PlotMode.xy
-    fig = plt.figure()
-    ax = evo.tools.plot.prepare_axis(fig, plot_mode)
-    ax.set_title(f"ATE RMSE: {ape_stat}")
-    evo.tools.plot.traj(ax, plot_mode, traj_ref, "--", "gray", "gt")
-    evo.tools.plot.traj_colormap(
-        ax,
-        traj_est_aligned,
-        ape_metric.error,
-        plot_mode,
-        min_map=ape_stats["min"],
-        max_map=ape_stats["max"],
-    )
-    ax.legend()
-    plt.savefig(os.path.join(plot_dir, "evo_2dplot_{}.png".format(str(label))), dpi=90)
+    # plot_mode = evo.tools.plot.PlotMode.xy
+    # fig = plt.figure()
+    # ax = evo.tools.plot.prepare_axis(fig, plot_mode)
+    # ax.set_title(f"ATE RMSE: {ape_stat}")
+    # evo.tools.plot.traj(ax, plot_mode, traj_ref, "--", "gray", "gt")
+    # evo.tools.plot.traj_colormap(
+    #     ax,
+    #     traj_est_aligned,
+    #     ape_metric.error,
+    #     plot_mode,
+    #     min_map=ape_stats["min"],
+    #     max_map=ape_stats["max"],
+    # )
+    # ax.legend()
+    # plt.savefig(os.path.join(plot_dir, "evo_2dplot_{}.png".format(str(label))), dpi=90)
 
     return ape_stat
 
@@ -77,12 +77,22 @@ def eval_ate(frames, kf_ids, save_dir, iterations, final=False, monocular=False)
         pose[0:3, 3] = T.cpu().numpy()
         return pose
 
-    for kf_id in kf_ids:
-        kf = frames[kf_id]
-        pose_est = np.linalg.inv(gen_pose_matrix(kf.R, kf.T))
-        pose_gt = np.linalg.inv(gen_pose_matrix(kf.R_gt, kf.T_gt))
+    # for kf_id in kf_ids:
+    #     kf = frames[kf_id]
+    #     pose_est = np.linalg.inv(gen_pose_matrix(kf.R, kf.T))
+    #     pose_gt = np.linalg.inv(gen_pose_matrix(kf.R_gt, kf.T_gt))
 
-        trj_id.append(frames[kf_id].uid)
+    #     trj_id.append(frames[kf_id].uid)
+    #     trj_est.append(pose_est.tolist())
+    #     trj_gt.append(pose_gt.tolist())
+
+    #     trj_est_np.append(pose_est)
+    #     trj_gt_np.append(pose_gt)
+    for _, frame in frames.items():
+        pose_est = np.linalg.inv(gen_pose_matrix(frame.R, frame.T))
+        pose_gt = np.linalg.inv(gen_pose_matrix(frame.R_gt, frame.T_gt))
+
+        trj_id.append(frame.uid)
         trj_est.append(pose_est.tolist())
         trj_gt.append(pose_gt.tolist())
 
@@ -123,49 +133,88 @@ def eval_rendering(
     kf_indices,
     iteration="final",
 ):
-    interval = 5
+    interval = 1
     img_pred, img_gt, saved_frame_idx = [], [], []
-    end_idx = len(frames) - 1 if iteration == "final" or "before_opt" else iteration
+    end_idx = len(frames)
     psnr_array, ssim_array, lpips_array = [], [], []
+    psnr_mask_array, ssim_mask_array, lpips_mask_array = [], [], []
     cal_lpips = LearnedPerceptualImagePatchSimilarity(
         net_type="alex", normalize=True
     ).to("cuda")
+    cal_psnr = PeakSignalNoiseRatio().to("cuda")
+    cal_ssim = StructuralSimilarityIndexMeasure().to("cuda")
+    render_dir = os.path.join(save_dir, "render")
+    os.makedirs(render_dir, exist_ok=True)
+
+    trj_est_np, trj_gt_np = [], []
+
+    def gen_pose_matrix(R, T):
+        pose = np.eye(4)
+        pose[0:3, 0:3] = R.cpu().numpy()
+        pose[0:3, 3] = T.cpu().numpy()
+        return pose
+
+    for _, frame in frames.items():
+        pose_est = gen_pose_matrix(frame.R, frame.T)
+        pose_gt = gen_pose_matrix(frame.R_gt, frame.T_gt)
+
+        trj_est_np.append(pose_est)
+        trj_gt_np.append(pose_gt)
+
+    trj_est_evo = trajectory.PosePath3D(poses_se3=trj_est_np)
+    trj_gt_evo = trajectory.PosePath3D(poses_se3=trj_gt_np)
+
+    trj_gt_evo.align(trj_est_evo)
+
+    trj_gt = torch.from_numpy(np.array(trj_gt_evo.poses_se3))
+
     for idx in range(0, end_idx, interval):
-        if idx in kf_indices:
-            continue
+        # if idx in kf_indices:
+        #     continue
         saved_frame_idx.append(idx)
-        frame = frames[idx]
-        gt_image, _, _ = dataset[idx]
+        frame = deepcopy(frames[idx])
+        gt_image, depth, _ = dataset[idx]
+        gt_image = gt_image.unsqueeze(0)
+        frame.update_RT(trj_gt[idx][:3, :3], trj_gt[idx][:3, 3])
 
         rendering = render(frame, gaussians, pipe, background)["render"]
-        image = torch.clamp(rendering, 0.0, 1.0)
+        image = torch.clamp(rendering, 0.0, 1.0).unsqueeze(0)
 
-        gt = (gt_image.cpu().numpy().transpose((1, 2, 0)) * 255).astype(np.uint8)
-        pred = (image.detach().cpu().numpy().transpose((1, 2, 0)) * 255).astype(
-            np.uint8
-        )
-        gt = cv2.cvtColor(gt, cv2.COLOR_BGR2RGB)
-        pred = cv2.cvtColor(pred, cv2.COLOR_BGR2RGB)
-        img_pred.append(pred)
-        img_gt.append(gt)
-
-        mask = gt_image > 0
-
-        psnr_score = psnr((image[mask]).unsqueeze(0), (gt_image[mask]).unsqueeze(0))
-        ssim_score = ssim((image).unsqueeze(0), (gt_image).unsqueeze(0))
-        lpips_score = cal_lpips((image).unsqueeze(0), (gt_image).unsqueeze(0))
+        psnr_score = cal_psnr(image, gt_image)
+        ssim_score = cal_ssim(image, gt_image)
+        lpips_score = cal_lpips(image, gt_image)
 
         psnr_array.append(psnr_score.item())
         ssim_array.append(ssim_score.item())
         lpips_array.append(lpips_score.item())
 
+        mask = gt_image.sum(1, keepdim=True) > 0
+
+        image = image * mask
+        # gt_image = gt_image * mask
+
+        psnr_score = cal_psnr(image, gt_image)
+        ssim_score = cal_ssim(image, gt_image)
+        lpips_score = cal_lpips(image, gt_image)
+
+        psnr_mask_array.append(psnr_score.item())
+        ssim_mask_array.append(ssim_score.item())
+        lpips_mask_array.append(lpips_score.item())
+
+        torchvision.utils.save_image(image, os.path.join(render_dir, f"{idx:04d}.png"))
+
     output = dict()
     output["mean_psnr"] = float(np.mean(psnr_array))
+    output["mean_psnr_mask"] = float(np.mean(psnr_mask_array))
     output["mean_ssim"] = float(np.mean(ssim_array))
+    output["mean_ssim_mask"] = float(np.mean(ssim_mask_array))
     output["mean_lpips"] = float(np.mean(lpips_array))
+    output["mean_lpips_mask"] = float(np.mean(lpips_mask_array))
 
     Log(
-        f'mean psnr: {output["mean_psnr"]}, ssim: {output["mean_ssim"]}, lpips: {output["mean_lpips"]}',
+        f'mean psnr: {output["mean_psnr"]}, ssim: {output["mean_ssim"]}, lpips: {output["mean_lpips"]}\n',
+        f'mean psnr_mask: {output["mean_psnr_mask"]}, ssim_mask: {output["mean_ssim_mask"]}, lpips_mask: {output["mean_lpips_mask"]}\n',
+        f'points: {gaussians.get_xyz.shape[0]}',
         tag="Eval",
     )
 

@@ -6,7 +6,6 @@ import cv2
 import numpy as np
 import torch
 import trimesh
-from PIL import Image
 
 from gaussian_splatting.utils.graphics_utils import focal2fov
 
@@ -198,6 +197,7 @@ class BaseDataset(torch.utils.data.Dataset):
         self.device = "cuda:0"
         self.dtype = torch.float32
         self.num_imgs = 999999
+        self.disorted_mask = None
 
     def __len__(self):
         return self.num_imgs
@@ -258,7 +258,9 @@ class MonocularDataset(BaseDataset):
         color_path = self.color_paths[idx]
         pose = self.poses[idx]
 
-        image = np.array(Image.open(color_path))
+        # image = np.array(Image.open(color_path))
+        image = cv2.imread(color_path, cv2.IMREAD_COLOR)
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         depth = None
 
         if self.disorted:
@@ -266,7 +268,8 @@ class MonocularDataset(BaseDataset):
 
         if self.has_depth:
             depth_path = self.depth_paths[idx]
-            depth = np.array(Image.open(depth_path)) / self.depth_scale
+            # depth = np.array(Image.open(depth_path)) / self.depth_scale
+            depth = cv2.imread(depth_path, cv2.IMREAD_UNCHANGED).astype(np.float32) / self.depth_scale
 
         image = (
             torch.from_numpy(image / 255.0)

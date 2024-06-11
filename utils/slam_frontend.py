@@ -458,20 +458,20 @@ class FrontEnd(mp.Process):
                     self.cleanup(cur_frame_idx)
                 cur_frame_idx += 1
 
-                if (
-                    self.save_results
-                    and self.save_trj
-                    and create_kf
-                    and len(self.kf_indices) % self.save_trj_kf_intv == 0
-                ):
-                    Log("Evaluating ATE at frame: ", cur_frame_idx)
-                    eval_ate(
-                        self.cameras,
-                        self.kf_indices,
-                        self.save_dir,
-                        cur_frame_idx,
-                        monocular=self.monocular,
-                    )
+                # if (
+                #     self.save_results
+                #     and self.save_trj
+                #     and create_kf
+                #     and len(self.kf_indices) % self.save_trj_kf_intv == 0
+                # ):
+                #     Log("Evaluating ATE at frame: ", cur_frame_idx)
+                #     eval_ate(
+                #         self.cameras,
+                #         self.kf_indices,
+                #         self.save_dir,
+                #         cur_frame_idx,
+                #         monocular=self.monocular,
+                #     )
                 toc.record()
                 torch.cuda.synchronize()
                 if create_kf:

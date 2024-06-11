@@ -151,38 +151,38 @@ class SLAM:
                 FPS,
             )
 
-            # re-used the frontend queue to retrive the gaussians from the backend.
-            while not frontend_queue.empty():
-                frontend_queue.get()
-            backend_queue.put(["color_refinement"])
-            while True:
-                if frontend_queue.empty():
-                    time.sleep(0.01)
-                    continue
-                data = frontend_queue.get()
-                if data[0] == "sync_backend" and frontend_queue.empty():
-                    gaussians = data[1]
-                    self.gaussians = gaussians
-                    break
+            # # re-used the frontend queue to retrive the gaussians from the backend.
+            # while not frontend_queue.empty():
+            #     frontend_queue.get()
+            # backend_queue.put(["color_refinement"])
+            # while True:
+            #     if frontend_queue.empty():
+            #         time.sleep(0.01)
+            #         continue
+            #     data = frontend_queue.get()
+            #     if data[0] == "sync_backend" and frontend_queue.empty():
+            #         gaussians = data[1]
+            #         self.gaussians = gaussians
+            #         break
 
-            rendering_result = eval_rendering(
-                self.frontend.cameras,
-                self.gaussians,
-                self.dataset,
-                self.save_dir,
-                self.pipeline_params,
-                self.background,
-                kf_indices=kf_indices,
-                iteration="after_opt",
-            )
-            metrics_table.add_data(
-                "After",
-                rendering_result["mean_psnr"],
-                rendering_result["mean_ssim"],
-                rendering_result["mean_lpips"],
-                ATE,
-                FPS,
-            )
+            # rendering_result = eval_rendering(
+            #     self.frontend.cameras,
+            #     self.gaussians,
+            #     self.dataset,
+            #     self.save_dir,
+            #     self.pipeline_params,
+            #     self.background,
+            #     kf_indices=kf_indices,
+            #     iteration="after_opt",
+            # )
+            # metrics_table.add_data(
+            #     "After",
+            #     rendering_result["mean_psnr"],
+            #     rendering_result["mean_ssim"],
+            #     rendering_result["mean_lpips"],
+            #     ATE,
+            #     FPS,
+            # )
             wandb.log({"Metrics": metrics_table})
             save_gaussians(self.gaussians, self.save_dir, "final_after_opt", final=True)
 
@@ -203,6 +203,7 @@ if __name__ == "__main__":
     parser = ArgumentParser(description="Training script parameters")
     parser.add_argument("--config", type=str)
     parser.add_argument("--eval", action="store_true")
+    parser.add_argument("--seed", default=0, type=int)
 
     args = parser.parse_args(sys.argv[1:])
 
@@ -231,7 +232,7 @@ if __name__ == "__main__":
         current_datetime = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
         path = config["Dataset"]["dataset_path"].split("/")
         save_dir = os.path.join(
-            config["Results"]["save_dir"], path[-3] + "_" + path[-2], current_datetime
+            config["Results"]["save_dir"], path[-3] + "_" + path[-2], path[-1], f"{args.seed}"
         )
         tmp = args.config
         tmp = tmp.split(".")[0]
